@@ -63,8 +63,18 @@ the mock server above is running and wired up.
 
 ## Run the container locally (phase 2)
 
-Keep `mock_internal_api.py` running from phase 1 (still on `:8090` on the
-host) and point the container at the host's network:
+Optional — this is a local sanity check that the Dockerfile and `server.py`
+work together before deploying, not a requirement. If you don't have Docker
+installed (`docker: command not found`) and don't want to install it, skip
+straight to phase 3: `scripts/deploy.sh` builds the image with `gcloud
+builds submit`, which runs on Cloud Build rather than your machine, so it
+never touches a local `docker` binary. It does need the `gcloud` CLI
+installed and authenticated instead.
+
+If you do want to test the container locally, install Docker first
+(Docker Desktop on Mac/Windows, or `curl -fsSL https://get.docker.com | sh`
+on Linux). Then keep `mock_internal_api.py` running from phase 1 (still on
+`:8090` on the host) and point the container at the host's network:
 
 ```bash
 cd agent
