@@ -147,6 +147,23 @@ if ! gcloud iam service-accounts describe "${RUNTIME_SA_EMAIL}" \
   gcloud iam service-accounts create "${RUNTIME_SA_NAME}" \
     --project "${PROJECT_ID}" \
     --display-name="Runtime identity for the Inventory Assistant ADK agent"
+
+  # Newly created service accounts can take a few seconds to propagate to
+  # other APIs (IAM bindings, Cloud Run). Using it immediately after create
+  # intermittently fails with "service account ... does not exist" --
+  # poll until it's actually visible before moving on.
+  echo "==> Waiting for '${RUNTIME_SA_EMAIL}' to propagate"
+  for i in $(seq 1 30); do
+    if gcloud iam service-accounts describe "${RUNTIME_SA_EMAIL}" \
+        --project "${PROJECT_ID}" >/dev/null 2>&1; then
+      break
+    fi
+    if [ "${i}" -eq 30 ]; then
+      echo "error: '${RUNTIME_SA_EMAIL}' still not visible after 60s." >&2
+      exit 1
+    fi
+    sleep 2
+  done
 fi
 
 echo "==> Least-privilege IAM roles for the runtime service account"
