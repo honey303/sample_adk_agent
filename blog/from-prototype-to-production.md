@@ -291,3 +291,5 @@ Either way, the result is a Cloud Run revision that:
 ## What actually changed between phase 1 and phase 3
 
 Notably: none of the agent code did. `root_agent`, `get_inventory_status`, and `check_order_eligibility` are byte-for-byte the same in the local prototype and the Cloud Run deployment. What changed is everything around the agent — how it's invoked, how it's authenticated, and how its outbound calls are routed and restricted. That separation is the actual goal of treating "prototype to production" as two different concerns: agent behavior gets validated once, cheaply, and the infrastructure hardening it needs to be trusted with real internal data gets built and reviewed independently, as code — whether that's `scripts/setup_infra_gcloud.sh` or the equivalent Terraform in `infra/`.
+
+The full source for all three phases — agent, Dockerfile, `gcloud` and Terraform infra, test scripts — is in this repository under `agent/`, `infra/`, and `scripts/`. Clone it, swap in your own tools and internal API, and adapt the VPC governance layer to your org's actual policies. Happy tinkering!
