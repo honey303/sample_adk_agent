@@ -28,6 +28,7 @@ infra/                        # Terraform equivalent of the same infra (optional
 scripts/deploy.sh             # build image -> push -> setup_infra_gcloud.sh
 scripts/setup_infra_gcloud.sh # VPC, connector, NAT, firewall, IAM, Cloud Run -- plain gcloud, no Terraform
 blog/from-prototype-to-production.md
+blog/architecture.svg         # architecture diagram embedded in the blog post
 ```
 
 ## Run it locally (phase 1)

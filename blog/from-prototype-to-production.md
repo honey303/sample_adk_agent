@@ -4,6 +4,19 @@ Building an agent with Google's [Agent Development Kit](https://google.github.io
 
 The gap between the two halves is usually where agent projects stall: a prototype that works great against a public Gemini endpoint on a laptop, and a security team that (correctly) won't let an unauthenticated, internet-facing container reach internal systems. Closing that gap is an infrastructure problem as much as an agent-design problem, so this post treats them together.
 
+## Architecture
+
+Before walking through the code, here's the shape of the whole thing — the diagram follows the Architecture Center's diagramming conventions: trust boundaries nest project → region → VPC network → subnet, each drawn narrower than its parent; the runtime request path is numbered; the build/deploy path is a separate dashed lane; and a legend spells out what every box color and line style means.
+
+![Architecture diagram: an authorized caller reaches the internal-ingress Cloud Run service, which calls the internal inventory API through a Serverless VPC Access connector, reads a secret from Secret Manager, and calls Vertex AI's Gemini API over a private path, all inside a deny-by-default VPC](architecture.svg)
+
+A few things the picture makes explicit that are easy to lose in prose:
+
+- **Cloud Run sits outside the VPC boundary.** It's a serverless resource, not a VPC-native one — there's no way to "put it inside" the network the way you would a VM. The Serverless VPC Access connector (②) is the only bridge in, and it only carries RFC1918 traffic (`vpc-egress: private-ranges-only`), so it's useless for reaching the public internet — that's what Cloud NAT is for, and this deployment never needs it since every real destination is either inside the subnet or reachable over Google's private path.
+- **Two separate outbound paths, not one.** Calls to the internal inventory API (②) go through the connector into the subnet. Calls to Secret Manager (③) and Vertex AI's Gemini API (④) go directly over Google's private network (`private.googleapis.com`) and never touch the connector at all — conflating these two paths is a common misconfiguration that either breaks the direct-path calls or, worse, quietly routes them somewhere ungoverned.
+- **The inbound path is the mirror image of the outbound one.** `--ingress=internal-and-cloud-load-balancing` means step ① can only originate from inside the VPC (or through an internal/external HTTPS load balancer fronting the service) — a public caller doesn't get an authentication error, they get no route to the service at all.
+- **`roles/run.invoker` starts empty.** Nothing in this diagram can call the Cloud Run service until something is explicitly added to it — that's `AUTHORIZED_INVOKERS` in `scripts/setup_infra_gcloud.sh`, deliberately absent from the default deploy.
+
 ## The agent
 
 The Inventory Assistant answers two kinds of questions for an internal team: "is this SKU in stock?" and "can we fulfill this order in this region?". Both answers come from an internal inventory API — `http://inventory-api.internal:8080` — that has no public IP. That detail is the whole reason this post exists: the moment an agent's tools need to reach something private, "deploy the container somewhere with a public URL" stops being a viable production plan.
