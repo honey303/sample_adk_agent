@@ -21,6 +21,7 @@ agent/
   inventory_assistant/   # the ADK agent: agent.py (root_agent) + tools.py
   local_run.py           # phase 1: run the agent locally
   server.py              # phase 3: FastAPI wrapper for Cloud Run
+  mock_internal_api.py   # local stand-in for inventory-api.internal (see below)
   Dockerfile
   requirements.txt
 infra/                   # Terraform: VPC, connector, NAT, firewall, IAM, Cloud Run, VPC-SC
@@ -30,33 +31,60 @@ blog/from-prototype-to-production.md
 
 ## Run it locally (phase 1)
 
+The agent's tools call `inventory-api.internal` — a hostname that, by
+design, only resolves inside the real enterprise VPC (see `infra/vpc.tf`).
+There's nothing to actually call by default, so `agent/mock_internal_api.py`
+is a tiny stand-in for it: run that first so the demo has a real backend to
+talk to, then point the agent at it with `INTERNAL_API_BASE_URL`.
+
 ```bash
 cd agent
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# terminal 1: the mock internal API, listening on :8090
+python mock_internal_api.py
+```
+
+```bash
+# terminal 2: the agent, pointed at the mock
+cd agent && source .venv/bin/activate
 export GOOGLE_API_KEY=...      # or configure Vertex AI application-default credentials
+export INTERNAL_API_BASE_URL=http://localhost:8090
 python local_run.py "Do we have SKU-10293 in stock, and can I ship 50 units to us-east?"
 ```
 
-The `get_inventory_status` / `check_order_eligibility` tools call
-`INTERNAL_API_BASE_URL` (default `http://inventory-api.internal:8080`), which
-won't resolve outside a real enterprise network — that's expected locally;
-the tools degrade to an `"unavailable"` response instead of crashing.
+Without `INTERNAL_API_BASE_URL` set (or without the mock server running),
+the tools call the real `inventory-api.internal` default, can't resolve it,
+and degrade to an `"unavailable"` response instead of crashing — that's the
+intended behavior for an actual outage, not something to debug around, but
+it does mean you'll only see the agent's real reasoning over live data once
+the mock server above is running and wired up.
 
 ## Run the container locally (phase 2)
+
+Keep `mock_internal_api.py` running from phase 1 (still on `:8090` on the
+host) and point the container at the host's network:
 
 ```bash
 cd agent
 docker build -t inventory-assistant .
-docker run -d -p 8080:8080 -e GOOGLE_API_KEY=... --name inventory-assistant inventory-assistant
+docker run -d -p 8080:8080 \
+  -e GOOGLE_API_KEY=... \
+  -e INTERNAL_API_BASE_URL=http://host.docker.internal:8090 \
+  --add-host=host.docker.internal:host-gateway \
+  --name inventory-assistant inventory-assistant
 curl localhost:8080/healthz    # expect {"status":"ok"} once the container is up
 curl -X POST localhost:8080/invoke -H 'content-type: application/json' \
   -d '{"query": "Is SKU-10293 in stock?"}'
 ```
 
-`-d` runs the container in the background so the `curl` commands actually get
-to run afterward in the same shell; `docker stop inventory-assistant` when
-you're done.
+`--add-host=host.docker.internal:host-gateway` is what lets the container
+reach the mock API running on your host; it's required on Linux and a
+harmless no-op on Docker Desktop for Mac/Windows, which already provides
+that mapping. `-d` runs the container in the background so the `curl`
+commands actually get to run afterward in the same shell; `docker stop
+inventory-assistant` when you're done.
 
 **Getting "can't reach the server" / "server not found"?**
 

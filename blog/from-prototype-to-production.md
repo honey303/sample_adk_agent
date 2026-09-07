@@ -77,7 +77,7 @@ export GOOGLE_API_KEY=...
 python local_run.py "Do we have SKU-10293 in stock, and can I ship 50 units to us-east?"
 ```
 
-Off the corporate network, `inventory-api.internal` won't resolve — the tool catches the `requests.RequestException` and returns `{"status": "unavailable"}` instead of crashing the run, so prototyping isn't blocked on having VPC access. This is the whole point of phase 1: validate the agent's reasoning and tool-calling behavior cheaply, before infrastructure enters the picture at all.
+Off the corporate network, `inventory-api.internal` won't resolve — the tool catches the `requests.RequestException` and returns `{"status": "unavailable"}` instead of crashing the run. That graceful degradation is what makes phase 1 possible at all without VPC access, but it also means you won't see the agent reason over real data unless something is actually listening on the other end. `agent/mock_internal_api.py` is exactly that: a few in-memory routes standing in for the real internal service, so `INTERNAL_API_BASE_URL=http://localhost:8090 python local_run.py "..."` exercises the full tool-calling loop with genuine responses instead of `"unavailable"` placeholders. This is the whole point of phase 1: validate the agent's reasoning and tool-calling behavior cheaply, before infrastructure enters the picture at all.
 
 ## Phase 2: containerize
 
