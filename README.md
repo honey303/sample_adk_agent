@@ -48,10 +48,36 @@ the tools degrade to an `"unavailable"` response instead of crashing.
 ```bash
 cd agent
 docker build -t inventory-assistant .
-docker run -p 8080:8080 -e GOOGLE_API_KEY=... inventory-assistant
+docker run -d -p 8080:8080 -e GOOGLE_API_KEY=... --name inventory-assistant inventory-assistant
+curl localhost:8080/healthz    # expect {"status":"ok"} once the container is up
 curl -X POST localhost:8080/invoke -H 'content-type: application/json' \
   -d '{"query": "Is SKU-10293 in stock?"}'
 ```
+
+`-d` runs the container in the background so the `curl` commands actually get
+to run afterward in the same shell; `docker stop inventory-assistant` when
+you're done.
+
+**Getting "can't reach the server" / "server not found"?**
+
+- Use `http://localhost:8080` (or `127.0.0.1:8080`), not the
+  `http://0.0.0.0:8080` address `uvicorn` prints in its startup log —
+  `0.0.0.0` is a bind address, not something a browser can connect to.
+  `curl` and most browsers will refuse to resolve it.
+- Confirm the container is actually running and listening:
+  `docker ps` should list it, and `docker logs inventory-assistant` should
+  show `Uvicorn running on http://0.0.0.0:8080`. If the container isn't in
+  `docker ps`, it exited — the logs will show why (commonly a missing
+  `GOOGLE_API_KEY` isn't fatal here since the model client is created lazily
+  per-request, so look for an import error or bad `requirements.txt`
+  install instead).
+- Make sure `-p 8080:8080` was actually passed to `docker run` — without it,
+  the port inside the container is never published to the host and
+  `localhost:8080` will refuse the connection.
+- `/invoke` only accepts `POST`. Opening `http://localhost:8080/invoke`
+  directly in a browser sends a `GET` and returns `405 Method Not Allowed`,
+  not a "server not found" error — a different symptom worth distinguishing
+  from an actual connectivity problem.
 
 ## Deploy to production (phase 3)
 
