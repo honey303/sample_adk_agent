@@ -149,3 +149,64 @@ as IaC — it's kept in the repo as an alternative, not used by
 including the optional VPC Service Controls perimeter (`infra/vpc_sc.tf`,
 which currently has no `gcloud`-only equivalent in this repo since it
 depends on an org-level Access Context Manager policy).
+
+### Testing the deployed endpoint
+
+The service is deployed with `--ingress=internal-and-cloud-load-balancing`
+and `--no-allow-unauthenticated`, so — unlike phases 1 and 2 — you
+genuinely cannot reach it from your laptop, no matter what IAM role you
+hold. The request has to originate inside the VPC. `scripts/test_cloud_run.sh`
+sets that up: a minimal, no-external-IP Compute Engine VM in the same
+private subnet, an IAP-only SSH firewall rule (no public ports opened), and
+`roles/run.invoker` granted to the VM's service account.
+
+```bash
+export PROJECT_ID=your-gcp-project
+export REGION=us-central1                     # match what you deployed with
+export SERVICE_NAME=inventory-assistant-agent # match what you deployed with
+./scripts/test_cloud_run.sh
+```
+
+It prints the exact `gcloud compute ssh --tunnel-through-iap` command and,
+once inside the VM, the `curl` commands to call `/healthz` and `/invoke`
+using an identity token fetched from the VM's metadata server (no `gcloud`
+install needed on the VM itself). Delete the VM when you're done —
+`gcloud compute instances delete adk-test-vm --project "$PROJECT_ID" --zone
+"${REGION}-a"` — it's a real, billed resource.
+
+**`/invoke` will report the inventory tool as `"unavailable"`** unless
+`INTERNAL_API_BASE_URL` on the Cloud Run service points at something real.
+That's expected: this repo never stood up an actual `inventory-api.internal`
+backend, in the cloud any more than locally — the deployed agent hitting
+"unavailable" is proof the VPC's deny-by-default egress and internal-only
+ingress are both working as designed, not a bug. If you want a fully live
+round trip in the cloud too, point the service at a copy of
+`agent/mock_internal_api.py` running on the same test VM:
+
+```bash
+# still inside the test VM from the previous step
+python3 -m venv /tmp/mock-venv && source /tmp/mock-venv/bin/activate
+pip install fastapi 'uvicorn[standard]'
+# copy agent/mock_internal_api.py onto the VM first, e.g. via
+#   gcloud compute scp agent/mock_internal_api.py adk-test-vm:~ --project "$PROJECT_ID" --zone "${REGION}-a" --tunnel-through-iap
+python3 mock_internal_api.py   # listens on :8090
+```
+
+Then, from your own machine, point the deployed service at the VM's
+internal IP and redeploy just that env var:
+
+```bash
+VM_IP=$(gcloud compute instances describe adk-test-vm --project "$PROJECT_ID" \
+  --zone "${REGION}-a" --format='value(networkInterfaces[0].networkIP)')
+gcloud run services update "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" \
+  --update-env-vars="INTERNAL_API_BASE_URL=http://${VM_IP}:8090"
+```
+
+This needs one more firewall rule the base setup doesn't include, since
+`allow-internal-egress` only opens ports 443 and 8080 from the connector's
+CIDR: `gcloud compute firewall-rules create adk-agents-vpc-allow-mock-api
+--project "$PROJECT_ID" --network adk-agents-vpc --direction=EGRESS
+--action=ALLOW --rules=tcp:8090 --destination-ranges=10.10.0.0/24`. Revert
+`INTERNAL_API_BASE_URL` back to the real `inventory-api.internal:8080`
+default (or just tear the VM down) once you're done — this is a testing
+convenience, not something to leave wired into a real deployment.
