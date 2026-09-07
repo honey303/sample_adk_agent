@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Phase 3: production deploy.
+# Phase 3: production deploy, gcloud CLI only (no Terraform required).
 #
-# Builds the agent container, pushes it to Artifact Registry, then applies
-# the Terraform in infra/ to (re)create the VPC, connector, NAT, firewall
-# rules, IAM bindings, and the Cloud Run service itself.
+# Builds the agent container, pushes it to Artifact Registry, then hands
+# off to setup_infra_gcloud.sh to provision the VPC governance layer
+# (private VPC, Serverless VPC Access connector, Cloud NAT, deny-by-default
+# firewall, least-privilege IAM, a Secret Manager secret) and deploy the
+# Cloud Run service -- all with plain `gcloud` commands. See infra/*.tf for
+# an equivalent Terraform version, kept as an alternative for anyone who
+# prefers IaC; nothing here depends on it.
 #
 # Required env vars:
 #   PROJECT_ID   GCP project to deploy into
@@ -12,25 +16,16 @@
 #   REPO          Artifact Registry repo name, default adk-agents
 #   SERVICE_NAME  Cloud Run service name, default inventory-assistant-agent
 #   TAG           image tag, defaults to the current short git SHA
+#   AUTHORIZED_INVOKERS  comma-separated IAM members allowed to invoke the
+#                        service (see setup_infra_gcloud.sh)
 
 set -euo pipefail
 
-for bin in gcloud terraform; do
-  if ! command -v "${bin}" >/dev/null 2>&1; then
-    echo "error: '${bin}' is not installed or not on PATH." >&2
-    case "${bin}" in
-      gcloud)
-        echo "  Install: https://cloud.google.com/sdk/docs/install" >&2
-        ;;
-      terraform)
-        echo "  Install: https://developer.hashicorp.com/terraform/install" >&2
-        echo "  macOS:   brew tap hashicorp/tap && brew install hashicorp/tap/terraform" >&2
-        echo "  Linux:   see the apt/yum instructions at the link above" >&2
-        ;;
-    esac
-    exit 1
-  fi
-done
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "error: 'gcloud' is not installed or not on PATH." >&2
+  echo "  Install: https://cloud.google.com/sdk/docs/install" >&2
+  exit 1
+fi
 
 : "${PROJECT_ID:?Set PROJECT_ID to your GCP project id}"
 REGION="${REGION:-us-central1}"
@@ -51,6 +46,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
+  compute.googleapis.com \
   --project "${PROJECT_ID}"
 
 echo "==> Ensuring Artifact Registry repo '${REPO}' exists"
@@ -67,14 +63,12 @@ gcloud builds submit "${REPO_ROOT}/agent" \
   --tag "${IMAGE}" \
   --project "${PROJECT_ID}"
 
-echo "==> Applying Terraform"
-pushd "${REPO_ROOT}/infra" >/dev/null
-terraform init -upgrade
-terraform apply \
-  -var "project_id=${PROJECT_ID}" \
-  -var "region=${REGION}" \
-  -var "service_name=${SERVICE_NAME}" \
-  -var "container_image=${IMAGE}"
-popd >/dev/null
+echo "==> Provisioning VPC governance and deploying Cloud Run"
+PROJECT_ID="${PROJECT_ID}" \
+  REGION="${REGION}" \
+  SERVICE_NAME="${SERVICE_NAME}" \
+  IMAGE="${IMAGE}" \
+  AUTHORIZED_INVOKERS="${AUTHORIZED_INVOKERS:-}" \
+  "${SCRIPT_DIR}/setup_infra_gcloud.sh"
 
 echo "==> Done. '${SERVICE_NAME}' is deployed with internal-only ingress and VPC egress."

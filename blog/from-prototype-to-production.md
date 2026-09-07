@@ -258,21 +258,23 @@ resource "google_access_context_manager_service_perimeter" "agent_perimeter" {
 
 ## Shipping it
 
-`scripts/deploy.sh` chains the two halves: build and push the image, then apply the Terraform.
+`scripts/deploy.sh` chains the two halves: build and push the image, then provision everything above and deploy.
 
 ```bash
 export PROJECT_ID=your-gcp-project
 ./scripts/deploy.sh
 ```
 
-Under the hood it enables the required APIs, builds `agent/` with Cloud Build, pushes to Artifact Registry, and runs `terraform apply` against `infra/`, passing the freshly built image reference through as `container_image`. The result is a Cloud Run revision that:
+Under the hood it enables the required APIs, builds `agent/` with Cloud Build, pushes to Artifact Registry, and hands off to `scripts/setup_infra_gcloud.sh`, which recreates every resource shown in the Terraform snippets above with plain `gcloud` commands instead — same VPC, same connector, same firewall rules, same IAM roles, same `gcloud run deploy` flags. It's idempotent (each resource is created only if a `gcloud ... describe` doesn't already find it), so re-running it after a code change just pushes a new image and updates the Cloud Run revision. The only tool this needs beyond the `gcloud` CLI itself is a GCP project to point it at — no Terraform install required. If you'd rather manage this as Terraform state instead of imperative `gcloud` calls, `infra/*.tf` is the same infrastructure as HCL; it's just not what `deploy.sh` uses by default.
 
-- is unreachable from the public internet (`ingress = INTERNAL_LOAD_BALANCER`),
-- has nobody authorized to invoke it until you add them to `authorized_invoker_members`,
+Either way, the result is a Cloud Run revision that:
+
+- is unreachable from the public internet (`--ingress=internal-and-cloud-load-balancing`),
+- has nobody authorized to invoke it until you set `AUTHORIZED_INVOKERS`,
 - can reach the internal inventory API through the VPC connector and nothing else outbound by default,
 - runs as a service account with two IAM roles, not the project-wide default,
 - and reads its shared secret from Secret Manager rather than a baked-in env var.
 
 ## What actually changed between phase 1 and phase 3
 
-Notably: none of the agent code did. `root_agent`, `get_inventory_status`, and `check_order_eligibility` are byte-for-byte the same in the local prototype and the Cloud Run deployment. What changed is everything around the agent — how it's invoked, how it's authenticated, and how its outbound calls are routed and restricted. That separation is the actual goal of treating "prototype to production" as two different concerns: agent behavior gets validated once, cheaply, and the infrastructure hardening it needs to be trusted with real internal data gets built and reviewed independently, as code, in `infra/`.
+Notably: none of the agent code did. `root_agent`, `get_inventory_status`, and `check_order_eligibility` are byte-for-byte the same in the local prototype and the Cloud Run deployment. What changed is everything around the agent — how it's invoked, how it's authenticated, and how its outbound calls are routed and restricted. That separation is the actual goal of treating "prototype to production" as two different concerns: agent behavior gets validated once, cheaply, and the infrastructure hardening it needs to be trusted with real internal data gets built and reviewed independently, as code — whether that's `scripts/setup_infra_gcloud.sh` or the equivalent Terraform in `infra/`.

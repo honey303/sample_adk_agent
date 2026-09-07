@@ -24,8 +24,9 @@ agent/
   mock_internal_api.py   # local stand-in for inventory-api.internal (see below)
   Dockerfile
   requirements.txt
-infra/                   # Terraform: VPC, connector, NAT, firewall, IAM, Cloud Run, VPC-SC
-scripts/deploy.sh        # build image -> push -> terraform apply
+infra/                        # Terraform equivalent of the same infra (optional, see below)
+scripts/deploy.sh             # build image -> push -> setup_infra_gcloud.sh
+scripts/setup_infra_gcloud.sh # VPC, connector, NAT, firewall, IAM, Cloud Run -- plain gcloud, no Terraform
 blog/from-prototype-to-production.md
 ```
 
@@ -124,8 +125,27 @@ export PROJECT_ID=your-gcp-project
 ./scripts/deploy.sh
 ```
 
-This builds and pushes the image with Cloud Build, then applies the
-Terraform in `infra/` to stand up the VPC, connector, NAT, firewall rules,
-runtime service account, and the Cloud Run service itself (internal ingress
-only, no public invoker). See the blog post for the full walkthrough,
-including the optional VPC Service Controls perimeter.
+This builds and pushes the image with Cloud Build, then runs
+`scripts/setup_infra_gcloud.sh` to stand up the VPC, Serverless VPC Access
+connector, Cloud NAT, deny-by-default firewall rules, the runtime service
+account, a Secret Manager secret for the internal API key, and the Cloud
+Run service itself (internal ingress only, no public invoker) — all with
+plain `gcloud` commands. The only tool it needs beyond what phase 2 already
+required is the [`gcloud` CLI](https://cloud.google.com/sdk/docs/install),
+authenticated (`gcloud auth login` and `gcloud config set project
+$PROJECT_ID`); no Terraform install required. It's safe to re-run —
+`setup_infra_gcloud.sh` checks whether each resource already exists before
+creating it.
+
+By default nobody can invoke the deployed service (it's internal-ingress
+only, with no `run.invoker` binding beyond project owners). To authorize
+specific callers, set `AUTHORIZED_INVOKERS` to a comma-separated list of
+IAM members before running the script, e.g.
+`AUTHORIZED_INVOKERS="serviceAccount:gateway@${PROJECT_ID}.iam.gserviceaccount.com" ./scripts/deploy.sh`.
+
+**Prefer Terraform?** `infra/*.tf` describes the identical set of resources
+as IaC — it's kept in the repo as an alternative, not used by
+`deploy.sh`. See the blog post for the full walkthrough of each resource,
+including the optional VPC Service Controls perimeter (`infra/vpc_sc.tf`,
+which currently has no `gcloud`-only equivalent in this repo since it
+depends on an org-level Access Context Manager policy).
