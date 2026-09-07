@@ -15,6 +15,23 @@
 
 set -euo pipefail
 
+for bin in gcloud terraform; do
+  if ! command -v "${bin}" >/dev/null 2>&1; then
+    echo "error: '${bin}' is not installed or not on PATH." >&2
+    case "${bin}" in
+      gcloud)
+        echo "  Install: https://cloud.google.com/sdk/docs/install" >&2
+        ;;
+      terraform)
+        echo "  Install: https://developer.hashicorp.com/terraform/install" >&2
+        echo "  macOS:   brew tap hashicorp/tap && brew install hashicorp/tap/terraform" >&2
+        echo "  Linux:   see the apt/yum instructions at the link above" >&2
+        ;;
+    esac
+    exit 1
+  fi
+done
+
 : "${PROJECT_ID:?Set PROJECT_ID to your GCP project id}"
 REGION="${REGION:-us-central1}"
 REPO="${REPO:-adk-agents}"
